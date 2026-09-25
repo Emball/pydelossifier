@@ -74,11 +74,33 @@ Each 0x60-byte block: `[3.0 x8], [-0.5 x8], [Float.MIN_VALUE x8], [NaN-mask x8]`
 - `0x3344`: `2.5625` — inter-bin ratio for MP3 quantization comb
 - `0x338c`: `1.875` — second comb ratio (AAC / lower-quality pattern)
 
+**Harmonic weights (extracted from `0x7ffacea99450`–`0x7ffacea994dc`):**
+Weights decay non-linearly across 10 harmonics (harmonic 1 is fundamental, 2–10 are partials):
+`[0.1, 0.9, 0.8, 0.7, 0.6, 0.4, 0.3, 0.2, 0.1]`
+(Harmonic 1 = 0.1 is low because it's the direct-copy fundamental; harmonics 2–9 are the actual fill sources)
+
+**Windowing (confirmed from `0x7ffacea984e0`–`0x7ffacea98560`):**
+Window type: **sqrt-Hann** (sine window). Key values: `0.5` and `0.35355338` (= `1/sqrt(8)` = `sin(π/8)`).
+This is `w(n) = sin(π·n/N)` — standard MPEG/overlap-add sine window.
+Four overlapping window arrays at `param_1+0x140/0x160/0x180/0x1a0` correspond to the 4 SIMD lanes.
+
+**Overlap-add stride (confirmed from buffer offsets):**
+- Frame size: `0xcc00` = 52224 samples
+- Hop size: `0x4200` = 16896 samples
+- Overlap: ~67.6% (~2/3)
+- This is standard 3:1 overlap-add (hop ≈ frame/3.09, near-integer approximation of frame/3)
+
+**DR/BIYF angle constants (from `0x7ffacea98930`):**
+- `π/32 = 0.09817477` — band boundary angle for BIYF cosine shaping
+- `π/4 = 0.78539816` — second band boundary
+
 **Practical summary for implementation:**
 - Hole threshold: a bin is declared a hole when `current_mag < Float.MIN_VALUE` (effectively zero after codec quantization)
 - Fill formula: `fill = harmonic_prediction * (3*r - 0.5)` where `r = vrsqrt(energy)`
 - Reconstruction is gated by the NaN-mask: holes with `energy == 0` skip the fill
 - Frame size: 52224 samples; circular buffer: 13056 bins; history: 10 frames; harmonics per bin: 10
+- Windowing: sine window `w(n) = sin(π·n/N)` applied before FFT and after IFFT
+- Hop: 16896 samples (~frame/3)
 
 ## Repo Structure (planned, not yet built)
 
@@ -127,13 +149,16 @@ Processing...      [████████████] 100%  2m14s
 
 ## What Is Not Yet Known / Still To Investigate
 
-- Exact windowing function used before FFT (Hann assumed, not confirmed).
-- Whether DL operates on overlapping frames (overlap-add assumed).
-- Exact pre-ringing detection threshold for DR gating.
+- Exact pre-ringing detection threshold for DR gating (confirmed as runtime computed from sample rate; tunable parameter in implementation).
 - `FUN_7ffacc102c30` (DR innermost processing call) not yet read — low priority since DR is secondary to DL/FH.
+
+All other unknowns resolved via second Ghidra float dump (`0x7ffacea98000`–`0x7ffacea9a000`):
+- Windowing: confirmed sine window (sqrt-Hann), `w(n) = sin(π·n/N)`.
+- Overlap: confirmed 3:1 (~67.6%), hop = 16896 = frame/3.09.
+- Harmonic weights: `[0.1, 0.9, 0.8, 0.7, 0.6, 0.4, 0.3, 0.2, 0.1]` for harmonics 1–9.
 
 All critical threshold constants extracted via Ghidra Java script — see Key Constants above.
 
 ## Version
 
-0.0.0.3
+0.0.0.4
