@@ -49,12 +49,36 @@ Input → FFT → DR (de-ringing) → DL (Delossifier) → FH (Spectral Hole Fil
 - Confidence score stored at `param_1 + 0x7a4`.
 - Detection is pre-pass; we implement heuristic detection (spectral flatness + comb pattern analysis) before the DSP pipeline runs.
 
-### Key Constants
-- Frame size: 52224 samples
-- Circular buffer length: 13056 bins
-- History depth: 10 frames
-- Harmonic window: 10 surrounding partials per bin
-- Newton-Raphson for fast sqrt: `r = -(r*r*x) + r + r`
+### Key Constants (verified from Ghidra float dump, `0x7ffacdf02d00`–`0x7ffacdf03400`)
+
+**Newton-Raphson fast sqrt coefficients:**
+- `0x2d00`: `1/9 ≈ 0.1111` (x8) — Newton-Raphson denominator correction
+- `0x2d20`: `0.25` (x8) — harmonic weight decay factor
+- `0x2d40`: `3.0` (x8) — the `3 - x*r*r` coefficient in `r * (3 - x*r*r)`
+- `0x2d60`: `~1.4e-45` = `Float.MIN_VALUE` (x8) — denormal / epsilon guard
+- `0x2d80`: `2.0` (x8) — harmonic energy scaling
+
+**Per-harmonic triplet pattern (repeats x10 for 10 harmonics, starting at `0x2de0`):**
+Each 0x60-byte block: `[3.0 x8], [-0.5 x8], [Float.MIN_VALUE x8], [NaN-mask x8]`
+- `3.0` = Newton-Raphson coefficient (same formula, applied to harmonic magnitudes)
+- `-0.5` = bias subtracted from reconstruction estimate
+- `Float.MIN_VALUE` = comparison floor for hole detection threshold
+- `NaN` = bitmask used in `vcmpps` to gate reconstruction (disables output when magnitude above threshold)
+
+**BIYF / DR constants:**
+- `0x32e0`: `π ≈ 3.1415927` (x8) — used in cosine window for BIYF band shaping
+- `0x3300`: `0.5` (x8) — BIYF amplitude scale
+- `0x3320`: `[1,2,3,4,5,6,7,8]` as floats — harmonic index series
+
+**Comb pattern detection (for MPEG identification):**
+- `0x3344`: `2.5625` — inter-bin ratio for MP3 quantization comb
+- `0x338c`: `1.875` — second comb ratio (AAC / lower-quality pattern)
+
+**Practical summary for implementation:**
+- Hole threshold: a bin is declared a hole when `current_mag < Float.MIN_VALUE` (effectively zero after codec quantization)
+- Fill formula: `fill = harmonic_prediction * (3*r - 0.5)` where `r = vrsqrt(energy)`
+- Reconstruction is gated by the NaN-mask: holes with `energy == 0` skip the fill
+- Frame size: 52224 samples; circular buffer: 13056 bins; history: 10 frames; harmonics per bin: 10
 
 ## Repo Structure (planned, not yet built)
 
@@ -104,11 +128,12 @@ Processing...      [████████████] 100%  2m14s
 ## What Is Not Yet Known / Still To Investigate
 
 - Exact windowing function used before FFT (Hann assumed, not confirmed).
-- Exact threshold constants for hole detection (the `fRam00007ffacdf02d*` values from Ghidra — need extraction).
 - Whether DL operates on overlapping frames (overlap-add assumed).
 - Exact pre-ringing detection threshold for DR gating.
 - `FUN_7ffacc102c30` (DR innermost processing call) not yet read — low priority since DR is secondary to DL/FH.
 
+All critical threshold constants extracted via Ghidra Java script — see Key Constants above.
+
 ## Version
 
-0.0.0.2
+0.0.0.3
