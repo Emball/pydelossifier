@@ -19,11 +19,16 @@ Input → FFT → DR (de-ringing) → DL (Delossifier) → FH (Spectral Hole Fil
 - Frame size: 0xcc00 = 52224 samples (from `lVar71 = lVar96 * 0xcc00`).
 - Circular buffer: 0x3300 = 13056 bins, ~10 frames of history.
 
-### DR — De-ringing (`FUN_7ffacca116e0`)
-- Uses a `hiyf` (high-frequency) buffer to isolate and subtract pre-ringing artifacts.
-- Core op: `output[i] = (input[i] - hiyf[i]) + prev[i]`
+### DR — De-ringing / BIYF (`FUN_7ffacca116e0`, inner: `FUN_7ffacc0ff430`)
+- Internally called BIYF ("Bandlimited Inverse YF"). Strings: `s_BIYF_YES`, `s_BIYF_NO`, `s_BIYF_YES_3RD`.
+- Three-band spectral shaping system, not simple subtraction. `bVar55 < 3` outer loop = 3 bands.
+- Core per-band op (triple product with window coefficients): `output[i] = spectrum[i] * reference[i] * window[i]`
+- Four overlapping window arrays at `param_1 + 0x140`, `0x160`, `0x180`, `0x1a0`.
+- Energy accumulator = MPEG detector: `energy += (sample[i] * ref[i])²`, fast invsqrt → inverse RMS table at `param_1 + 0x12a1c0`.
+- Pre-ringing frame count `iVar53 = (int)(frame_count * sample_rate * DAT_7ffaceaac968 + 0.5)`.
+- Gated by MPEG detection flag at `param_1 + 0x750` / `0x751`.
 - Handles stereo channel swap internally.
-- Gated by MPEG detection flag.
+- `FUN_7ffacc102c30` is the core inner processing call (still unread — low priority, DR is secondary to DL).
 
 ### DL — Delossifier (`FUN_7ffacc0f7ca0`, AVX2 path)
 - Per-bin spectral magnitude via fast inverse sqrt (Newton-Raphson, 1 iteration):
@@ -102,8 +107,8 @@ Processing...      [████████████] 100%  2m14s
 - Exact threshold constants for hole detection (the `fRam00007ffacdf02d*` values from Ghidra — need extraction).
 - Whether DL operates on overlapping frames (overlap-add assumed).
 - Exact pre-ringing detection threshold for DR gating.
-- `FUN_7ffacc0ff3f0` (DR inner function) not yet fully read — needed before implementing dr.py.
+- `FUN_7ffacc102c30` (DR innermost processing call) not yet read — low priority since DR is secondary to DL/FH.
 
 ## Version
 
-0.0.0.1
+0.0.0.2
